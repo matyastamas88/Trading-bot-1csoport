@@ -38,6 +38,33 @@ logger = logging.getLogger("main_c1")
 LABEL = "1.csoport"
 
 
+
+async def do_update(client, notify_chat_id):
+    """GitHub frissítés végrehajtása és bot újraindítása."""
+    import subprocess, sys, os
+    await send_notification(
+        f"🔄 <b>Frissítés elindítva...</b>\n"
+        f"GitHub ellenőrzése folyamatban."
+    )
+    try:
+        result = subprocess.run(
+            ["git", "pull", "origin", "main"],
+            capture_output=True, text=True,
+            cwd=os.path.dirname(os.path.abspath(__file__))
+        )
+        if "Already up to date" in result.stdout:
+            await send_notification("✅ <b>Már a legfrissebb verzió fut.</b>\nNincs új frissítés.")
+            return
+        await send_notification(
+            f"✅ <b>Frissítés sikeres!</b>\n"
+            f"Bot újraindítása folyamatban...\n\n"
+            f"{result.stdout[:200]}"
+        )
+        await asyncio.sleep(2)
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+    except Exception as e:
+        await send_notification(f"❌ <b>Frissítés sikertelen!</b>\nHiba: {e}")
+
 # ── Heartbeat ─────────────────────────────────────────────────────────────────
 
 async def run_heartbeat():
@@ -127,6 +154,16 @@ async def run_bot():
     async def on_message(event):
         text = event.message.text or ""
         logger.info(f"[{LABEL}] Új üzenet ({len(text)} karakter)")
+
+        # ── Update parancs ellenőrzése ──────────────────────────────────
+        if text.strip().lower() in ["/update", "!update"]:
+            sender = await event.get_sender()
+            if sender and sender.id == config.NOTIFY_CHAT_ID:
+                logger.info(f"[{LABEL}] UPDATE parancs érkezett!")
+                asyncio.create_task(do_update(client, config.NOTIFY_CHAT_ID))
+            else:
+                logger.warning("UPDATE parancs ismeretlen feladótól — kihagyva.")
+            return
 
         # ── Close parancs ellenőrzése ─────────────────────────────────────
         if "close" in text.lower():

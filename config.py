@@ -70,3 +70,6 @@ HEARTBEAT_MINUTE = 0
 LOG_FILE        = "csoport1_bot.log"
 SPREAD_LOG_FILE = "csoport1_spread_log.csv"
 POSITIONS_FILE  = "csoport1_positions.json"
+
+# --- PARANCS CSATORNA ---
+COMMAND_CHANNEL = -5120457999  # Bot Parancsok&Infok csoport
