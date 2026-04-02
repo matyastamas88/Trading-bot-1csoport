@@ -13,6 +13,8 @@ Indítás: python main.py
 import asyncio
 import logging
 import sys
+import os
+import subprocess
 from datetime import datetime
 from telethon import TelegramClient, events
 
@@ -38,6 +40,38 @@ logger = logging.getLogger("main_c1")
 LABEL = "1.csoport"
 
 
+
+
+def check_and_update():
+    """Indításkor ellenőrzi van-e újabb verzió GitHubon. Ha igen, frissít és újraindul."""
+    try:
+        result = subprocess.run(
+            ["git", "fetch", "origin"],
+            capture_output=True, text=True,
+            cwd=os.path.dirname(os.path.abspath(__file__))
+        )
+        if result.returncode != 0:
+            print("Git fetch sikertelen — offline mód, frissítés kihagyva.")
+            return
+
+        result = subprocess.run(
+            ["git", "rev-list", "HEAD..origin/main", "--count"],
+            capture_output=True, text=True,
+            cwd=os.path.dirname(os.path.abspath(__file__))
+        )
+        count = result.stdout.strip()
+        if count and int(count) > 0:
+            print(f"🔄 {count} új commit elérhető — frissítés...")
+            subprocess.run(
+                ["git", "pull", "origin", "main"],
+                cwd=os.path.dirname(os.path.abspath(__file__))
+            )
+            print("✅ Frissítés kész! Bot újraindítása...")
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+        else:
+            print("✅ Bot naprakész, nincs frissítés.")
+    except Exception as e:
+        print(f"Frissítés ellenőrzés sikertelen: {e} — folytatás frissítés nélkül.")
 
 async def do_update(client, notify_chat_id):
     """GitHub frissítés végrehajtása és bot újraindítása."""
@@ -190,6 +224,70 @@ async def run_bot():
         else:
             logger.debug("Nem felismert formátum — kihagyva.")
 
+
+    # ── Parancs csoport figyelő ───────────────────────────────────────────────
+    command_channel = getattr(config, 'COMMAND_CHANNEL', None)
+    if command_channel:
+        @client.on(events.NewMessage(chats=command_channel))
+        async def on_command(event):
+            text = (event.message.text or "").strip().lower()
+            sender = await event.get_sender()
+            sender_id = sender.id if sender else None
+
+            if sender_id != config.NOTIFY_CHAT_ID:
+                logger.warning(f"Parancs ismeretlen feladótól ({sender_id}) — kihagyva.")
+                return
+
+            logger.info(f"[{LABEL}] Parancs érkezett: {text}")
+
+            if text in ["/update", "!update"]:
+                asyncio.create_task(do_update(client, config.NOTIFY_CHAT_ID))
+
+            elif text in ["/close", "!close"]:
+                sikeres, sikertelen = close_all_positions(config, label=LABEL)
+                if sikeres > 0 or sikertelen > 0:
+                    await send_notification(
+                        f"🔴 <b>Close parancs végrehajtva!</b>\n"
+                        f"Forrás: <b>{LABEL}</b>\n"
+                        f"✅ Lezárva: {sikeres} | ❌ Sikertelen: {sikertelen}"
+                    )
+                else:
+                    await send_notification(f"ℹ️ <b>Nincs nyitott bot pozíció.</b>")
+
+            elif text in ["/status", "!status"]:
+                now = datetime.now()
+                mozgo = "MOZGÓ SL" if config.MOZGO_SL_ENABLED else "FIX SL"
+                aktiv_poz = []
+                if config.POS1_ENABLED: aktiv_poz.append(f"{config.POS1_LABEL}({config.POS1_LOT}lot)")
+                if config.POS2_ENABLED: aktiv_poz.append(f"{config.POS2_LABEL}({config.POS2_LOT}lot)")
+                if config.POS3_ENABLED: aktiv_poz.append(f"{config.POS3_LABEL}({config.POS3_LOT}lot)")
+                try:
+                    participants = await client.get_participants(command_channel)
+                    tagok = [f"  • {p.first_name or ''} {p.last_name or ''} (@{p.username or 'nincs'})".strip()
+                             for p in participants if not p.bot]
+                    tagok_szoveg = "\n".join(tagok) if tagok else "  (nincs tag)"
+                except Exception:
+                    tagok_szoveg = "  (nem sikerült lekérni)"
+
+                await send_notification(
+                    f"📊 <b>Bot státusz — {LABEL}</b>\n"
+                    f"Idő: {now.strftime('%Y-%m-%d %H:%M')}\n"
+                    f"Verzió: {mozgo}\n"
+                    f"Aktív: {', '.join(aktiv_poz) if aktiv_poz else 'egyik sem'}\n\n"
+                    f"👥 <b>Parancs csatorna tagjai:</b>\n{tagok_szoveg}"
+                )
+
+            elif text in ["/help", "!help"]:
+                await send_notification(
+                    f"📋 <b>Elérhető parancsok:</b>\n\n"
+                    f"/update — Bot frissítése GitHubról\n"
+                    f"/close — Összes nyitott pozíció lezárása\n"
+                    f"/status — Bot státusz + csatlakozott tagok\n"
+                    f"/help — Parancsok listája"
+                )
+
+        logger.info(f"[{LABEL}] Parancs csatorna figyelés aktív: {command_channel}")
+
     await client.start(phone=config.TELEGRAM_PHONE)
     logger.info(f"[{LABEL}] Telegram figyelés aktív: {config.SIGNAL_CHANNEL}")
 
@@ -212,6 +310,8 @@ async def run_bot():
 
 
 if __name__ == "__main__":
+    # Frissítés ellenőrzés indítás előtt
+    check_and_update()
     try:
         asyncio.run(run_bot())
     except KeyboardInterrupt:
