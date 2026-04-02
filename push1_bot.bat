@@ -1,11 +1,13 @@
 @echo off
-set /p msg="Mi valtozott? "
-:: A -A kapcsoló mindent eszrevesz: ujat, toroltet, modositottat
+set /p msg="Leiras a valtoztatashoz: "
 git add -A
 git commit -m "%msg%"
+:: Előbb megpróbáljuk behúzni a változásokat, hogy ne legyen hiba
+git pull origin main --rebase
+:: Utána küldjük fel
 git push origin main
 echo.
-echo =========================================
-echo   Sikeresen feltoltve es szinkronizalva!
-echo =========================================
+echo ========================================
+echo   Kesz! Minden frissitve a GitHubon.
+echo ========================================
 pause
