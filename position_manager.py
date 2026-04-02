@@ -1,7 +1,13 @@
 """
-Pozíció figyelő — v2
-- Mozgó SL trigger: POS1 (TP3) pozíció lezárulása alapján, nem ár figyeléssel
+Pozíció figyelő — v3
+- Kettős trigger: testvér pozíció zárulása + ár alapú figyelés
+- Önállóan is működik (pl. csak magic=33 fut)
 - JSON mentés adatvesztés ellen
+
+Mozgó SL logika (magic=32 és 33):
+  TP3 elérve → SL = Entry
+  TP4 elérve → SL = TP1
+  TP5 elérve → SL = TP2  (csak magic=33)
 """
 
 import asyncio
@@ -22,9 +28,6 @@ _active_deals:  dict[int, dict] = {}
 _pending_deals: dict[int, dict] = {}
 
 POSITIONS_FILE = getattr(config, 'POSITIONS_FILE', 'positions.json')
-
-# Csoportosítás jelzés alapján: signal_id → [ticket1, ticket2, ticket3]
-# Így tudjuk melyik pozíciók tartoznak össze
 _signal_groups: dict[str, list[int]] = {}
 
 
@@ -67,23 +70,41 @@ def _load_positions():
         logger.error(f"Pozíció betöltés sikertelen: {e}")
 
 
-# ── Mozgó SL lépési táblázat ──────────────────────────────────────────────────
+# ── Mozgó SL szabályok ────────────────────────────────────────────────────────
 
-def build_mozgo_sl_table(start_tp_index: int, last_tp_index: int) -> dict:
+# tp_trigger_index → (sl_forrás, következő_figyelendő_tp_index)
+# sl_forrás: "entry" vagy int (tp_levels index)
+# Ez az általános táblázat — a konkrét pozíciónál a start_tp_index alapján épül fel
+
+def get_sl_rules(magic: int) -> dict:
     """
-    Dinamikus mozgó SL táblázat.
-    start_tp elérésekor → SL = Entry
-    start_tp+1 elérésekor → SL = TP(start_tp-1) ha van, különben Entry marad
-    stb.
+    Visszaadja a mozgó SL szabályokat az adott magic numberhez.
+    A szabályok: melyik TP elérése után mi legyen az SL.
+
+    Magic=POS2 (TP5-re nyit):
+      TP3 (index 2) → SL = Entry,  következő figyelés: TP4
+      TP4 (index 3) → SL = TP1,    következő figyelés: TP5 (zárul)
+
+    Magic=POS3 (TP6-ra nyit):
+      TP3 (index 2) → SL = Entry,  következő figyelés: TP4
+      TP4 (index 3) → SL = TP1,    következő figyelés: TP5
+      TP5 (index 4) → SL = TP2,    következő figyelés: TP6 (zárul)
     """
-    table = {}
-    for i in range(start_tp_index, last_tp_index):
-        if i == start_tp_index:
-            sl_source = "entry"
-        else:
-            sl_source = max(0, i - 2)
-        table[i] = {"sl_source": sl_source, "next_tp_index": i + 1}
-    return table
+    pos2_magic = getattr(config, 'POS2_MAGIC', None)
+    pos3_magic = getattr(config, 'POS3_MAGIC', None)
+
+    if magic == pos2_magic:
+        return {
+            2: {"sl_source": "entry", "next_watch": 3},  # TP3→SL=Entry
+            3: {"sl_source": 0,       "next_watch": 4},  # TP4→SL=TP1
+        }
+    elif magic == pos3_magic:
+        return {
+            2: {"sl_source": "entry", "next_watch": 3},  # TP3→SL=Entry
+            3: {"sl_source": 0,       "next_watch": 4},  # TP4→SL=TP1
+            4: {"sl_source": 1,       "next_watch": 5},  # TP5→SL=TP2
+        }
+    return {}
 
 
 def _get_new_sl(deal: dict, sl_source) -> float:
@@ -113,11 +134,7 @@ def _magic_label(magic: int) -> str:
 # ── Regisztráció ──────────────────────────────────────────────────────────────
 
 def register_deal(deal: dict):
-    """
-    Regisztrálja a pozíciót figyelésre.
-    A signal_id alapján csoportosítja az összetartozó pozíciókat.
-    """
-    ticket = deal["ticket"]
+    ticket    = deal["ticket"]
     signal_id = deal.get("signal_id", "")
 
     if deal.get("is_pending"):
@@ -127,7 +144,6 @@ def register_deal(deal: dict):
         _active_deals[ticket] = deal
         logger.info(f"Pozíció figyelés: #{ticket} | {_magic_label(deal['magic'])}")
 
-    # Csoportba regisztrálás
     if signal_id:
         if signal_id not in _signal_groups:
             _signal_groups[signal_id] = []
@@ -137,32 +153,112 @@ def register_deal(deal: dict):
     _save_positions()
 
 
-# ── TP3 elérés detektálása deal history alapján ───────────────────────────────
+# ── History alapú detektálás ──────────────────────────────────────────────────
 
 def _was_closed_at_tp(ticket: int) -> bool:
-    """
-    Ellenőrzi hogy a pozíció TP szinten zárult-e (nem SL-en vagy manuálisan).
-    MT5 history alapján: ha a zárási ár közel van a TP szinthez.
-    """
-    if not mt5.history_deals_get(position=ticket):
+    """Ellenőrzi hogy a pozíció TP-n zárt-e az MT5 history alapján."""
+    try:
+        deals = mt5.history_deals_get(position=ticket)
+        if not deals:
+            return False
+        close_deal = sorted(deals, key=lambda d: d.time)[-1]
+        return close_deal.reason == mt5.DEAL_REASON_TP
+    except Exception:
         return False
-    deals = mt5.history_deals_get(position=ticket)
-    if not deals:
+
+
+def _price_ever_reached_tp(deal: dict, tp_index: int) -> bool:
+    """
+    Ellenőrzi hogy az ár valaha elérte-e a TP szintet
+    az MT5 tick history alapján — visszamenőleg is detektálható.
+    Ez a backup trigger ha nincs testvér pozíció.
+    """
+    if tp_index >= len(deal["tp_levels"]):
         return False
-    # Az utolsó deal a zárás
-    close_deal = sorted(deals, key=lambda d: d.time)[-1]
-    # entry típus = 1 (OUT), reason = 1 (TP)
-    return close_deal.reason == mt5.DEAL_REASON_TP
+
+    tp_price = deal["tp_levels"][tp_index]
+    action   = deal["action"]
+
+    # Lekérjük a legutóbbi tick-eket
+    ticks = mt5.copy_ticks_from(
+        config.SYMBOL,
+        int(datetime.fromisoformat(deal["time"]).timestamp()),
+        50000,
+        mt5.COPY_TICKS_ALL
+    )
+    if ticks is None or len(ticks) == 0:
+        # Ha nem érhető el history, ár alapú ellenőrzés
+        tick = mt5.symbol_info_tick(config.SYMBOL)
+        if tick is None:
+            return False
+        current = tick.bid if action == "SELL" else tick.ask
+        return (action == "SELL" and current <= tp_price) or \
+               (action == "BUY"  and current >= tp_price)
+
+    # Végigmegyünk a tickeken
+    for tick in ticks:
+        price = tick[2]  # bid
+        if action == "SELL" and price <= tp_price:
+            return True
+        if action == "BUY" and price >= tp_price:
+            return True
+    return False
 
 
 def _get_sister_deals(ticket: int) -> list[dict]:
-    """
-    Visszaadja az összetartozó pozíciókat (ugyanabból a jelzésből nyitottak).
-    """
+    """Visszaadja az összetartozó pozíciókat."""
     for signal_id, tickets in _signal_groups.items():
         if ticket in tickets:
             return [_active_deals[t] for t in tickets if t in _active_deals and t != ticket]
     return []
+
+
+# ── SL mozgatás végrehajtása ──────────────────────────────────────────────────
+
+async def _apply_sl_move(deal: dict, triggered_tp_index: int):
+    """
+    SL mozgatást hajt végre a triggered_tp_index alapján.
+    triggered_tp_index: melyik TP szint lett elérve (pl. 2=TP3, 3=TP4, 4=TP5)
+    """
+    ticket = deal["ticket"]
+    label  = _magic_label(deal["magic"])
+
+    if not is_position_open(ticket):
+        return
+
+    rules = get_sl_rules(deal["magic"])
+    if triggered_tp_index not in rules:
+        logger.debug(f"Nincs SL szabály TP{triggered_tp_index+1}-re (magic={deal['magic']})")
+        return
+
+    rule       = rules[triggered_tp_index]
+    new_sl     = _get_new_sl(deal, rule["sl_source"])
+    next_watch = rule["next_watch"]
+    sl_source  = rule["sl_source"]
+    sl_label   = "Entry" if sl_source == "entry" else f"TP{int(sl_source)+1}"
+    tp_name    = f"TP{triggered_tp_index+1}"
+
+    # TP marad az eredeti (a pozíció saját TP-je zárja)
+    new_tp = deal["tp"]
+
+    ok = modify_position(ticket, new_sl, new_tp, config.SYMBOL)
+    if ok:
+        deal["sl"]              = new_sl
+        deal["next_watch_tp"]   = next_watch   # következő figyelendő TP szint
+        deal["mozgo_sl_active"] = True
+        deal["last_triggered_tp"] = triggered_tp_index
+        _active_deals[ticket]   = deal
+        _save_positions()
+        logger.info(f"✅ SL mozgatva #{ticket}: {sl_label} ({new_sl}) | Következő figyelés: TP{next_watch+1}")
+        await send_notification(
+            f"📍 <b>{tp_name} elérve!</b>\n"
+            f"Forrás: <b>{label}</b>\n"
+            f"Ticket: #{ticket}\n"
+            f"SL átmozgatva: <b>{new_sl}</b> ({sl_label})\n"
+            f"Pozíció TP célja: <b>{new_tp}</b>"
+        )
+    else:
+        logger.error(f"SL mozgatás sikertelen #{ticket}")
 
 
 # ── Pending ellenőrzés ────────────────────────────────────────────────────────
@@ -211,28 +307,41 @@ async def _check_pending(ticket: int, deal: dict):
 # ── Aktív pozíció ellenőrzés ──────────────────────────────────────────────────
 
 async def _check_deal(ticket: int, deal: dict):
-    label = _magic_label(deal["magic"])
-    magic = deal["magic"]
+    label     = _magic_label(deal["magic"])
+    magic     = deal["magic"]
     pos1_magic = getattr(config, 'POS1_MAGIC', None)
+    pos2_magic = getattr(config, 'POS2_MAGIC', None)
+    pos3_magic = getattr(config, 'POS3_MAGIC', None)
 
     # ── Pozíció lezárult? ────────────────────────────────────────────────────
     if not is_position_open(ticket):
         logger.info(f"Pozíció zárul: #{ticket} ({label})")
 
-        # Ha ez a POS1 (TP3-as) pozíció és TP-n zárt → mozgassuk a testvér pozíciók SL-jét
+        # Ha POS1 TP-n zárt → triggereljük a testvér pozíciók TP3 SL mozgatását
         if config.MOZGO_SL_ENABLED and magic == pos1_magic:
             if _was_closed_at_tp(ticket):
-                logger.info(f"📍 POS1 (TP3) TP-n zárt → testvér pozíciók SL mozgatása")
-                sister_deals = _get_sister_deals(ticket)
-                for sister in sister_deals:
-                    await _apply_mozgo_sl_step(sister, triggered_by_pos1=True)
+                logger.info(f"📍 POS1 (TP3) TP-n zárt → testvér SL mozgatás (TP3 trigger)")
+                for sister in _get_sister_deals(ticket):
+                    last = sister.get("last_triggered_tp", -1)
+                    if last < 2:  # TP3 még nem volt triggerlve
+                        await _apply_sl_move(sister, triggered_tp_index=2)
             else:
-                logger.info(f"POS1 nem TP-n zárt (SL vagy manuális) — mozgó SL nem aktiválódik")
+                logger.info(f"POS1 SL-en/manuálisan zárt — mozgó SL nem aktiválódik")
+
+        # Ha POS2 TP-n zárt → triggereljük POS3 TP5 SL mozgatását
+        if config.MOZGO_SL_ENABLED and magic == pos2_magic:
+            if _was_closed_at_tp(ticket):
+                logger.info(f"📍 POS2 (TP5) TP-n zárt → POS3 SL mozgatás (TP5 trigger)")
+                for sister in _get_sister_deals(ticket):
+                    if sister["magic"] == pos3_magic:
+                        last = sister.get("last_triggered_tp", -1)
+                        if last < 4:  # TP5 még nem volt triggerlve
+                            await _apply_sl_move(sister, triggered_tp_index=4)
 
         await send_notification(
             f"🏁 <b>Pozíció lezárult</b>\n"
             f"Forrás: <b>{label}</b>\n"
-            f"Ticket: #{ticket} | Utolsó cél: TP{deal['tp_index']+1}"
+            f"Ticket: #{ticket} | Cél: TP{deal['tp_index']+1}"
         )
         del _active_deals[ticket]
         _save_positions()
@@ -242,97 +351,41 @@ async def _check_deal(ticket: int, deal: dict):
     if not config.MOZGO_SL_ENABLED:
         return
 
-    # POS1 (TP3) esetén nem kell ár figyelés — azt a zárás triggeri
+    # POS1 esetén nincs ár figyelés — azt a zárás triggeri
     if magic == pos1_magic:
         return
 
-    # POS2/POS3: csak ha már mozgó SL aktív (tp_index > start_tp_index)
-    start_tp = deal.get("start_tp_index", deal["tp_index"])
-    if deal["tp_index"] <= start_tp and deal.get("mozgo_sl_active", False) is False:
-        return  # Még nem aktiválódott a mozgó SL
-
-    # Ha már mozgó SL aktív, figyeljük a következő TP szinteket ár alapján
-    current_tp_index = deal["tp_index"]
-    last_tp = len(deal["tp_levels"]) - 1
-    step_table = build_mozgo_sl_table(start_tp, last_tp)
-
-    if current_tp_index not in step_table:
+    # ── POS2 és POS3: ár alapú figyelés (backup + önálló működés) ────────────
+    rules = get_sl_rules(magic)
+    if not rules:
         return
 
+    # Meghatározzuk melyik TP szintet kell most figyelni
+    last_triggered = deal.get("last_triggered_tp", -1)
+    next_watch     = deal.get("next_watch_tp", 2)  # alapból TP3-tól indul
+
+    if next_watch not in rules:
+        return  # Nincs több SL mozgatás
+
+    # Ellenőrizzük az árat
     tick = mt5.symbol_info_tick(config.SYMBOL)
     if tick is None:
         return
 
     current_price = tick.bid if deal["action"] == "SELL" else tick.ask
-    current_tp    = deal["tp_levels"][current_tp_index]
+    watch_tp_price = deal["tp_levels"][next_watch] if next_watch < len(deal["tp_levels"]) else None
+
+    if watch_tp_price is None:
+        return
 
     tp_reached = (
-        (deal["action"] == "SELL" and current_price <= current_tp) or
-        (deal["action"] == "BUY"  and current_price >= current_tp)
+        (deal["action"] == "SELL" and current_price <= watch_tp_price) or
+        (deal["action"] == "BUY"  and current_price >= watch_tp_price)
     )
 
-    if tp_reached:
-        await _apply_mozgo_sl_step(deal, triggered_by_pos1=False)
-
-
-async def _apply_mozgo_sl_step(deal: dict, triggered_by_pos1: bool = False):
-    """
-    Elvégzi az SL mozgatást a következő szintre.
-    triggered_by_pos1=True: POS1 zárása triggelte (TP3 elérve)
-    triggered_by_pos1=False: ár alapú trigger (TP4, TP5 stb.)
-    """
-    ticket = deal["ticket"]
-    label  = _magic_label(deal["magic"])
-
-    if not is_position_open(ticket):
-        return
-
-    start_tp = deal.get("start_tp_index", deal["tp_index"])
-    last_tp  = len(deal["tp_levels"]) - 1
-    step_table = build_mozgo_sl_table(start_tp, last_tp)
-
-    if triggered_by_pos1:
-        # POS1 zárása = TP3 elérve = első lépés: SL → Entry
-        current_tp_index = start_tp
-        deal["mozgo_sl_active"] = True
-    else:
-        current_tp_index = deal["tp_index"]
-
-    if current_tp_index not in step_table:
-        return
-
-    step        = step_table[current_tp_index]
-    new_sl      = _get_new_sl(deal, step["sl_source"])
-    next_tp_idx = step["next_tp_index"]
-
-    if next_tp_idx < len(deal["tp_levels"]):
-        new_tp     = deal["tp_levels"][next_tp_idx]
-        next_label = f"TP{next_tp_idx+1}"
-    else:
-        new_tp     = deal["tp"]
-        next_label = "utolsó TP"
-
-    sl_source = step["sl_source"]
-    sl_label  = "Entry" if sl_source == "entry" else f"TP{int(sl_source)+1}"
-    tp_name   = f"TP{current_tp_index+1}"
-
-    ok = modify_position(ticket, new_sl, new_tp, config.SYMBOL)
-    if ok:
-        deal["sl"]              = new_sl
-        deal["tp"]              = new_tp
-        deal["tp_index"]        = next_tp_idx
-        deal["mozgo_sl_active"] = True
-        _active_deals[ticket]   = deal
-        _save_positions()
-        await send_notification(
-            f"📍 <b>{tp_name} elérve!</b>\n"
-            f"Forrás: <b>{label}</b>\n"
-            f"Ticket: #{ticket}\n"
-            f"SL átmozgatva: <b>{new_sl}</b> ({sl_label})\n"
-            f"Következő cél: <b>{new_tp}</b> ({next_label})"
-        )
-    else:
-        logger.error(f"SL/TP módosítás sikertelen #{ticket}")
+    if tp_reached and last_triggered < next_watch:
+        logger.info(f"📍 TP{next_watch+1} ár alapú trigger: #{ticket} (magic={magic})")
+        await _apply_sl_move(deal, triggered_tp_index=next_watch)
 
 
 # ── Fő loop ───────────────────────────────────────────────────────────────────
