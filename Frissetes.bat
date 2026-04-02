@@ -7,27 +7,33 @@ echo   Trading Bot - Frissites letoltese a GitHubrol
 echo ============================================================
 echo.
 
-:: Lepjunk be a bot mappajaba
 cd /d %~dp0
 
-echo Ellenorzes: Van-e uj verzio...
-git fetch origin main
+:: Frissítjük a távoli infókat
+echo Kapcsolat ellenorzese...
+git fetch --all
+
+:: Megpróbáljuk kitalálni, mi az alapértelmezett ág (main vagy master)
+git rev-parse --verify origin/main >nul 2>&1
+if %errorlevel% equ 0 (set BRANCH=main) else (set BRANCH=master)
 
 echo.
+echo Ellenorzes az '%BRANCH%' agon...
+echo.
+
 echo Valtoztatasok listaja:
-git log HEAD..origin/main --oneline
+git log HEAD..origin/%BRANCH% --oneline
 
 echo.
 set /p VALASZ="Szeretned letolteni a frissitest? (i/n): "
 
 if /i "%VALASZ%"=="i" (
     echo.
-    echo Frissites letoltese...
-    git reset --hard origin/main
+    echo Frissites folyamatban...
+    git reset --hard origin/%BRANCH%
     echo.
     echo ============================================================
     echo   KESZ! A frissites sikeres volt.
-    echo   Most mar ujra gyarthatod az .exe-t vagy indithatod a botot.
     echo ============================================================
 ) else (
     echo.

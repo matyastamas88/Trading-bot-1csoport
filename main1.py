@@ -291,10 +291,30 @@ async def run_bot():
     await client.start(phone=config.TELEGRAM_PHONE)
     logger.info(f"[{LABEL}] Telegram figyelés aktív: {config.SIGNAL_CHANNEL}")
 
+# Csak az aktív pozíciók és beállítások összegyűjtése
+    settings_list = []
+    
+    if config.POS1_ENABLED:
+        settings_list.append(f"💰 POS1 Lot: <b>{config.POS1_LOT}</b> (TP3) | Magic: <code>11</code>")
+    
+    if config.POS2_ENABLED:
+        settings_list.append(f"💰 POS2 Lot: <b>{config.POS2_LOT}</b> (TP5) | Magic: <code>12</code>")
+        
+    if config.POS3_ENABLED:
+        settings_list.append(f"💰 POS3 Lot: <b>{config.POS3_LOT}</b> (TP6) | Magic: <code>13</code>")
+
+    # Mozgó SL állapota
+    sl_status = "<b>BE</b>" if config.MOZGO_SL_ENABLED else "<b>KI</b>"
+    settings_list.append(f"🛡️ Mozgó SL: {sl_status}")
+
+    # Lista összefűzése
+    settings_info = "\n" + "\n".join(settings_list) if settings_list else "\n<i>Nincs aktív beállítás.</i>"
+
     await send_notification(
         f"🟢 <b>1. csoport bot elindult!</b>\n"
         f"Verzió: <b>{mozgo}</b>\n"
-        f"Aktív: {', '.join(aktiv) if aktiv else 'egyik sem'}"
+        f"----------------------------"
+        f"{settings_info}"
     )
 
     monitor_task   = asyncio.create_task(run_monitor())
