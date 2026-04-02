@@ -102,6 +102,93 @@ def restart_mt5(cfg=None) -> bool:
         return False
 
 
+
+# ── Automata lot számítás ─────────────────────────────────────────────────────
+
+def calculate_lot(cfg, risk_pct: float, sl_price: float, entry_price: float) -> float:
+    """
+    Kiszámolja az optimális lot méretet a kockázat % alapján.
+    
+    Képlet: lot = (egyenleg × kockázat%) / (SL távolság USD-ben × 100)
+    Az XAUUSD-nél 1 lot = 100 oz, 1 pont = 1 USD mozgás 1 lotnál.
+    """
+    try:
+        info = mt5.account_info()
+        if info is None:
+            logger.warning("Nem sikerült lekérni az egyenleget — alapértelmezett lot használva")
+            return 0.01
+
+        balance    = info.balance
+        risk_usd   = balance * (risk_pct / 100.0)
+        sl_dist    = abs(entry_price - sl_price)
+
+        if sl_dist == 0:
+            logger.warning("SL távolság 0 — alapértelmezett lot használva")
+            return 0.01
+
+        # XAUUSD: 1 lot mozgása 1 pontban = 1 USD
+        # sl_dist pontban = sl_dist (mivel az ár USD/oz)
+        lot = risk_usd / (sl_dist * 1.0)
+
+        # Kerekítés 2 tizedesre, min 0.01
+        sym_info = mt5.symbol_info(cfg.SYMBOL)
+        if sym_info:
+            step = sym_info.volume_step
+            lot  = round(round(lot / step) * step, 2)
+
+        lot = max(0.01, min(lot, 100.0))
+        logger.info(f"Automata lot: {lot} | Egyenleg: {balance} | Kockázat: {risk_pct}% ({risk_usd:.2f} USD) | SL táv: {sl_dist}")
+        return lot
+
+    except Exception as e:
+        logger.error(f"Lot számítás hiba: {e} — 0.01 lot használva")
+        return 0.01
+
+
+# ── Napi veszteség ellenőrzés ─────────────────────────────────────────────────
+
+_daily_start_balance = None
+_daily_start_date    = None
+
+def check_daily_loss_limit(cfg) -> bool:
+    """
+    Ellenőrzi hogy elérte-e a napi veszteség limitet.
+    True = limit elérve (bot leáll), False = minden rendben.
+    """
+    global _daily_start_balance, _daily_start_date
+
+    limit_pct = getattr(cfg, 'DAILY_LOSS_LIMIT_PCT', 0.0)
+    if not limit_pct or limit_pct <= 0:
+        return False
+
+    try:
+        info = mt5.account_info()
+        if info is None:
+            return False
+
+        today = __import__('datetime').date.today()
+
+        # Nap elején menti az egyenleget
+        if _daily_start_date != today:
+            _daily_start_balance = info.balance
+            _daily_start_date    = today
+            logger.info(f"Napi egyenleg rögzítve: {_daily_start_balance} USD")
+            return False
+
+        # Veszteség számítás
+        loss     = _daily_start_balance - info.balance
+        loss_pct = (loss / _daily_start_balance) * 100 if _daily_start_balance > 0 else 0
+
+        if loss_pct >= limit_pct:
+            logger.warning(f"⛔ Napi limit elérve! Veszteség: {loss_pct:.1f}% (limit: {limit_pct}%)")
+            return True
+
+        return False
+
+    except Exception as e:
+        logger.error(f"Napi limit ellenőrzés hiba: {e}")
+        return False
+
 # ── Kapcsolat ─────────────────────────────────────────────────────────────────
 
 def connect(cfg, after_restart: bool = False) -> bool:
@@ -272,6 +359,29 @@ def place_order(signal, cfg, lot_size: float, magic: int, tp_index: int = 2) -> 
     spread_ok = check_spread(cfg, signal_action=signal.action)
     if spread_ok is not True:
         return None, spread_ok
+
+    # Napi veszteség limit ellenőrzés
+    if check_daily_loss_limit(cfg):
+        return None, f"Napi veszteség limit elérve ({getattr(cfg, 'DAILY_LOSS_LIMIT_PCT', 0)}%) — kereskedés kihagyva"
+
+    # Időablak ellenőrzés
+    if getattr(cfg, 'TRADE_HOURS_ENABLED', False):
+        now_hour = __import__('datetime').datetime.now().hour
+        start    = getattr(cfg, 'TRADE_HOUR_START', 0)
+        end      = getattr(cfg, 'TRADE_HOUR_END', 24)
+        if not (start <= now_hour < end):
+            return None, f"Kereskedési időablakon kívül ({now_hour}:00, ablak: {start}:00-{end}:00)"
+
+    # Automata lot számítás ha be van kapcsolva
+    if getattr(cfg, 'AUTO_LOT', False):
+        risk_map = {
+            getattr(cfg, 'POS1_MAGIC', None): getattr(cfg, 'POS1_RISK_PCT', 1.0),
+            getattr(cfg, 'POS2_MAGIC', None): getattr(cfg, 'POS2_RISK_PCT', 1.0),
+            getattr(cfg, 'POS3_MAGIC', None): getattr(cfg, 'POS3_RISK_PCT', 1.0),
+        }
+        risk_pct = risk_map.get(magic, 1.0)
+        lot_size = calculate_lot(cfg, risk_pct, signal.sl, signal.entry_mid)
+        logger.info(f"Automata lot: {lot_size} (magic={magic}, kockázat={risk_pct}%)")
 
     if len(signal.tp_levels) <= tp_index:
         err = f"Nincs elég TP szint (kell: {tp_index+1}, van: {len(signal.tp_levels)})"
