@@ -482,7 +482,22 @@ def place_order(signal, cfg, lot_size: float, magic: int, tp_index: int = 2) -> 
         logger.error(f"Megbízás sikertelen (magic={magic}): {err}")
         return None, err
 
-    exec_price = result.price if in_zone else entry_mid
+    # Piaci megbízásnál a result.price néha 0.0 (broker specifikus hiba)
+    # Ezért a tényleges nyitási árat az MT5 pozíció adataiból kérjük le
+    if in_zone:
+        import time as _time
+        _time.sleep(0.2)  # kis várakozás hogy az MT5 regisztrálja
+        pos = mt5.positions_get(ticket=result.order)
+        if pos and pos[0].price_open > 0:
+            exec_price = pos[0].price_open
+        elif result.price > 0:
+            exec_price = result.price
+        else:
+            # Fallback: aktuális ár lekérése
+            tick = mt5.symbol_info_tick(cfg.SYMBOL)
+            exec_price = tick.ask if signal.action == "BUY" else tick.bid if tick else entry_mid
+    else:
+        exec_price = entry_mid
     # signal_id: azonosítja az összetartozó pozíciókat (mozgó SL trigger)
     signal_id = f"{signal.action}_{signal.entry_mid}_{datetime.now().strftime('%Y%m%d_%H%M')}"
 
@@ -502,6 +517,7 @@ def place_order(signal, cfg, lot_size: float, magic: int, tp_index: int = 2) -> 
         "magic":          magic,
         "signal_id":      signal_id,  # összetartozó pozíciók azonosítója
         "is_pending":     not in_zone,
+        "is_market":      in_zone,     # True = azonnali piaci belépés
         "time":           datetime.now().isoformat(),
     }
 

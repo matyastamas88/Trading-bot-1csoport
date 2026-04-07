@@ -23,7 +23,7 @@ from signal_parser import parse_signal
 from mt5_trader import connect as mt5_connect, disconnect as mt5_disconnect
 from mt5_trader import place_order, set_notifier as mt5_set_notifier, close_all_positions
 from position_manager import register_deal, run_monitor
-from notifier import notify_trade_opened, notify_trade_failed, send_notification
+from notifier import notify_trade_opened, notify_trade_failed, notify_pending_opened, send_notification
 from sheets_logger import log_trade, log_skipped_signal
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -155,7 +155,10 @@ async def process_signal(signal):
         full_label = f"{LABEL} {pos_label}"
         if deal:
             register_deal(deal)
-            await notify_trade_opened(deal, label=full_label)
+            if deal.get("is_pending"):
+                await notify_pending_opened(deal, label=full_label)
+            else:
+                await notify_trade_opened(deal, label=full_label)
             log_trade(deal)
         else:
             await notify_trade_failed(error, label=full_label)
