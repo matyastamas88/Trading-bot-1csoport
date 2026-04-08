@@ -19,19 +19,25 @@ if %errorlevel% neq 0 (
     exit
 )
 
+:: Bot mappa (1 szinttel feljebb mint ez a bat fajl)
+set BOT_DIR=%~dp0..
+
 :: 2. FRISSÍTÉS GITHUBRÓL
 echo [+] Frissitesek letoltese a GitHubrol...
-git fetch origin main >nul 2>&1
-git reset --hard origin/main
+git -C "%BOT_DIR%" fetch origin main >nul 2>&1
+git -C "%BOT_DIR%" pull origin main
+echo [+] Frissites kesz!
 
 :: 3. FÜGGŐSÉGEK TELEPÍTÉSE
 echo [+] Szukseges modulok ellenorzese...
-pip install -r requirements.txt --quiet
+cd /d "%BOT_DIR%"
+pip install telethon python-telegram-bot MetaTrader5 python-dotenv --quiet
 
 :: 4. INDÍTÁS
 echo.
 echo ============================================================
 echo   Minden kesz! A bot indul...
 echo ============================================================
+cd /d "%BOT_DIR%"
 python main1.py
 pause
