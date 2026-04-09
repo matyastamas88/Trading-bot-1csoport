@@ -223,7 +223,7 @@ async def run_heartbeat():
             limit_info = f"Napi limit: {'korlátlan' if max_napi == 0 else str(max_napi)}"
 
             await send_notification(
-                f"✅ <b>1. csoport bot él</b>\n"
+                f"✅ <b>{LABEL} bot él</b>\n"
                 f"Idő: {now.strftime('%Y-%m-%d %H:%M')}\n"
                 f"Verzió: {mozgo}\n"
                 f"Aktív pozíciók: {', '.join(aktiv) if aktiv else 'egyik sem'}\n"
@@ -495,7 +495,7 @@ async def run_bot():
     settings_info = "\n" + "\n".join(settings_list) if settings_list else "\n<i>Nincs aktív beállítás.</i>"
 
     await send_notification(
-        f"🟢 <b>1. csoport bot elindult!</b>\n"
+        f"🟢<b>{LABEL} bot elindult!</b>\n"
         f"Verzió: <b>{mozgo}</b>\n"
         f"----------------------------"
         f"{settings_info}"
