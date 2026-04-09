@@ -99,6 +99,95 @@ async def do_update(client, notify_chat_id):
     except Exception as e:
         await send_notification(f"❌ <b>Frissítés sikertelen!</b>\nHiba: {e}")
 
+
+def check_mt5_health() -> dict:
+    """
+    MT5 önellenőrzés — fut-e, be van-e jelentkezve, megfelelő szimbólum-e,
+    algo trading be van-e kapcsolva, internet kapcsolat OK-e.
+    """
+    import MetaTrader5 as mt5
+    import urllib.request
+    eredmeny = {
+        "mt5_fut":      False,
+        "bejelentkezve": False,
+        "szimbolum_ok": False,
+        "algo_trading": False,
+        "internet_ok":  False,
+        "egyenleg":     None,
+        "szerver":      None,
+        "szimbolum":    config.SYMBOL,
+        "terminal_path": config.MT5_TERMINAL_PATH,
+    }
+
+    # Internet ellenőrzés
+    try:
+        urllib.request.urlopen("https://www.google.com", timeout=5)
+        eredmeny["internet_ok"] = True
+    except Exception:
+        eredmeny["internet_ok"] = False
+
+    try:
+        if not mt5.initialize():
+            return eredmeny
+        eredmeny["mt5_fut"] = True
+
+        info = mt5.account_info()
+        if info is None:
+            mt5.shutdown()
+            return eredmeny
+        eredmeny["bejelentkezve"] = True
+        eredmeny["egyenleg"]      = info.balance
+        eredmeny["szerver"]       = info.server
+
+        # Algo Trading ellenőrzés
+        terminal_info = mt5.terminal_info()
+        if terminal_info is not None:
+            eredmeny["algo_trading"] = terminal_info.trade_allowed
+
+        # Szimbólum ellenőrzés
+        sym = mt5.symbol_info(config.SYMBOL)
+        if sym is not None and sym.visible:
+            eredmeny["szimbolum_ok"] = True
+        elif sym is not None:
+            mt5.symbol_select(config.SYMBOL, True)
+            sym2 = mt5.symbol_info(config.SYMBOL)
+            eredmeny["szimbolum_ok"] = sym2 is not None
+
+        mt5.shutdown()
+    except Exception as e:
+        logger.error(f"MT5 önellenőrzés hiba: {e}")
+
+    return eredmeny
+
+
+def format_mt5_health(check: dict) -> str:
+    """Formázza az MT5 ellenőrzés eredményét Telegram üzenethez."""
+    import os
+
+    internet_sor = "✅ Internet: OK" if check["internet_ok"] else "❌ Internet: NINCS KAPCSOLAT!"
+    mt5_sor      = "✅ MT5 fut" if check["mt5_fut"] else "❌ MT5 NEM fut!"
+    bej_sor      = "✅ Bejelentkezve" if check["bejelentkezve"] else "❌ NEM bejelentkezve!"
+    algo_sor     = "✅ Algo Trading: BE" if check["algo_trading"] else "❌ Algo Trading: KI! (pozíció nem nyílhat)"
+    sym_sor      = f"✅ {check['szimbolum']} elérhető" if check["szimbolum_ok"] else f"❌ {check['szimbolum']} NEM elérhető!"
+
+    path     = check.get("terminal_path") or "nincs beállítva"
+    path_ok  = os.path.exists(path) if path and path != "nincs beállítva" else False
+    path_sor = "✅ Terminal megtalálható" if path_ok else f"❌ Terminal NEM található!\n   ({path})"
+
+    egyenleg_sor = f"💰 Egyenleg: {check['egyenleg']} USD" if check["egyenleg"] is not None else ""
+    szerver_sor  = f"🖥️ Szerver: {check['szerver']}" if check["szerver"] else ""
+
+    sorok = [internet_sor, mt5_sor, bej_sor, algo_sor, path_sor, sym_sor]
+    if egyenleg_sor: sorok.append(egyenleg_sor)
+    if szerver_sor:  sorok.append(szerver_sor)
+
+    minden_ok = (check["internet_ok"] and check["mt5_fut"] and check["bejelentkezve"]
+                 and check["algo_trading"] and check["szimbolum_ok"] and path_ok)
+    fejlec = "🟢 <b>MT5 állapot: OK</b>" if minden_ok else "🔴 <b>MT5 állapot: PROBLÉMA!</b>"
+
+    return fejlec + "\n" + "\n".join(sorok)
+
+
 # ── Heartbeat ─────────────────────────────────────────────────────────────────
 
 async def run_heartbeat():
@@ -115,11 +204,16 @@ async def run_heartbeat():
             if config.POS3_ENABLED: aktiv.append(f"{config.POS3_LABEL}({config.POS3_LOT}lot, magic={config.POS3_MAGIC})")
             mozgo = "MOZGÓ SL" if config.MOZGO_SL_ENABLED else "FIX SL"
 
+            # MT5 önellenőrzés
+            mt5_check = check_mt5_health()
+            mt5_info  = format_mt5_health(mt5_check)
+
             await send_notification(
                 f"✅ <b>1. csoport bot él</b>\n"
                 f"Idő: {now.strftime('%Y-%m-%d %H:%M')}\n"
                 f"Verzió: {mozgo}\n"
-                f"Aktív pozíciók: {', '.join(aktiv) if aktiv else 'egyik sem'}"
+                f"Aktív pozíciók: {', '.join(aktiv) if aktiv else 'egyik sem'}\n\n"
+                f"{mt5_info}"
             )
             last_sent_day = now.day
             logger.info("Heartbeat elküldve.")
