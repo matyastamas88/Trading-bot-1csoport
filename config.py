@@ -39,6 +39,15 @@ SYMBOL     = os.getenv("SYMBOL", "XAUUSD-VIP")  # VT Markets: XAUUSD-VIP | Black
 SLIPPAGE   = 10
 MAX_SPREAD = 400
 
+# --- BOT NEVE (.env-ből) ---
+# Ezt add meg a .env fájlban: BOT_NEV=SuperXAUUSD
+# Ez a név jelenik meg minden Telegram értesítésben
+BOT_NEV = os.getenv("BOT_NEV", "1.csoport")
+
+# --- SESSION FÁJL NEVE (.env-ből) ---
+# Minden botnak egyedi session fájl kell!
+SESSION_NEV = os.getenv("SESSION_NEV", "csoport1_session")
+
 # ============================================================
 #  POZÍCIÓ BEÁLLÍTÁSOK
 # ============================================================

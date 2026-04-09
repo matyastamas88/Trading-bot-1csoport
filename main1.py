@@ -37,7 +37,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("main_c1")
 
-LABEL = "1.csoport"
+LABEL = config.BOT_NEV  # .env fájlban állítható: BOT_NEV=SuperXAUUSD
 
 # ── Napi kereskedés számláló ──────────────────────────────────────────────────
 _napi_kereskedes_szam  = 0
@@ -311,7 +311,7 @@ async def process_signal(signal):
 
 async def run_bot():
     logger.info("=" * 60)
-    logger.info("1. CSOPORT Trading Bot indítása...")
+    logger.info(f"{config.BOT_NEV} Trading Bot indítása...")
     mozgo = "MOZGÓ SL" if config.MOZGO_SL_ENABLED else "FIX SL"
     logger.info(f"Verzió: {mozgo}")
     aktiv = []
@@ -327,7 +327,7 @@ async def run_bot():
         logger.critical("MT5 csatlakozás sikertelen. Bot leáll.")
         return
 
-    client = TelegramClient("csoport1_session", config.TELEGRAM_API_ID, config.TELEGRAM_API_HASH)
+    client = TelegramClient(config.SESSION_NEV, config.TELEGRAM_API_ID, config.TELEGRAM_API_HASH)
 
     @client.on(events.NewMessage(chats=config.SIGNAL_CHANNEL))
     async def on_message(event):

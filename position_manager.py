@@ -119,12 +119,8 @@ def _get_new_sl(deal: dict, sl_source) -> float:
 # ── Magic → label ─────────────────────────────────────────────────────────────
 
 def _magic_label(magic: int) -> str:
-    csoport = "1.csoport"
-    if hasattr(config, 'LOG_FILE'):
-        if 'csoport3' in config.LOG_FILE:
-            csoport = "3.csoport"
-        elif 'csoport2' in config.LOG_FILE:
-            csoport = "2.csoport"
+    # BOT_NEV a .env fájlból jön — dinamikusan azonosítja a botot
+    csoport = getattr(config, 'BOT_NEV', '1.csoport')
     for attr, label_attr in [('POS1_MAGIC','POS1_LABEL'),('POS2_MAGIC','POS2_LABEL'),('POS3_MAGIC','POS3_LABEL')]:
         if getattr(config, attr, None) == magic:
             return f"{csoport} {getattr(config, label_attr, attr)}"
