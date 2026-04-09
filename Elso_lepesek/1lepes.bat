@@ -11,12 +11,19 @@ echo ============================================================
 python --version >nul 2>&1
 if %errorlevel% neq 0 (
     echo [!] Python nem talalhato. Telepites...
-    powershell -Command "Invoke-WebRequest -Uri 'https://www.python.org/ftp/python/3.11.5/python-3.11.5-amd64.exe' -OutFile 'python_installer.exe'"
-    start /wait python_installer.exe /quiet InstallAllUsers=0 PrependPath=1 Include_test=0
-    del python_installer.exe
-    echo [+] Python telepitve! Kerlek inditsd ujra ezt a fajlt.
+    echo Letoltes folyamatban... (1-2 perc)
+    powershell -Command "& {[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri 'https://www.python.org/ftp/python/3.12.8/python-3.12.8-amd64.exe' -OutFile '%TEMP%\python_installer.exe'}"
+    if %errorlevel% neq 0 (
+        echo HIBA: Python letoltes sikertelen! Ellenorizd az internetkapcsolatot.
+        pause
+        exit /b 1
+    )
+    start /wait "%TEMP%\python_installer.exe" /quiet InstallAllUsers=1 PrependPath=1 Include_test=0
+    del "%TEMP%\python_installer.exe"
+    set "PATH=%PATH%;C:\Program Files\Python312;C:\Program Files\Python312\Scripts"
+    echo [+] Python sikeresen telepitve! Kerlek inditsd ujra ezt a fajlt.
     pause
-    exit
+    exit /b 0
 )
 
 :: Bot mappa (1 szinttel feljebb mint ez a bat fajl)
@@ -24,8 +31,8 @@ set BOT_DIR=%~dp0..
 
 :: 2. FRISSÍTÉS GITHUBRÓL
 echo [+] Frissitesek letoltese a GitHubrol...
-git -C "%BOT_DIR%" fetch origin main >nul 2>&1
-git -C "%BOT_DIR%" pull origin main
+git -C "%BOT_DIR%" fetch origin >nul 2>&1
+git -C "%BOT_DIR%" pull origin master
 echo [+] Frissites kesz!
 
 :: 3. FÜGGŐSÉGEK TELEPÍTÉSE
