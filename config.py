@@ -34,8 +34,8 @@ MT5_TERMINAL_PATH = os.getenv(
     r"C:\Program Files\VT Markets (Pty) MT5 Terminal\terminal64.exe"
 )
 
-# --- SYMBOL ---
-SYMBOL     = "XAUUSD-VIP"
+# --- SYMBOL (.env-ből) ---
+SYMBOL     = os.getenv("SYMBOL", "XAUUSD-VIP")  # VT Markets: XAUUSD-VIP | BlackBull: XAUUSD
 SLIPPAGE   = 10
 MAX_SPREAD = 400
 
