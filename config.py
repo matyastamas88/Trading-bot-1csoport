@@ -106,6 +106,9 @@ if os.path.exists(_settings_file):
         # Mozgó SL
         if "MOZGO_SL_ENABLED" in _s: MOZGO_SL_ENABLED = _s["MOZGO_SL_ENABLED"]
 
+        # Napi max kereskedés
+        MAX_NAPI_KERESKEDES = _s.get("MAX_NAPI_KERESKEDES", 0)
+
         # Napi limit
         DAILY_LOSS_LIMIT_PCT = _s.get("DAILY_LOSS_LIMIT_PCT", 0.0)
 
@@ -124,6 +127,7 @@ if os.path.exists(_settings_file):
         POS1_RISK_PCT        = 1.0
         POS2_RISK_PCT        = 1.0
         POS3_RISK_PCT        = 1.0
+        MAX_NAPI_KERESKEDES  = 0
 else:
     # Ha nincs user_settings.json, alapértelmezett értékek
     AUTO_LOT             = False
@@ -134,3 +138,4 @@ else:
     POS1_RISK_PCT        = 1.0
     POS2_RISK_PCT        = 1.0
     POS3_RISK_PCT        = 1.0
+    MAX_NAPI_KERESKEDES  = 0

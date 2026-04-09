@@ -214,6 +214,27 @@ def main():
     mozgo_sl = kerd_igen_nem("  Mozgó SL-t szeretnél? (i/n): ")
     settings["MOZGO_SL_ENABLED"] = mozgo_sl
 
+
+    # ── 5. MAX NAPI KERESKEDÉS ────────────────────────────────────────────────
+    clear()
+    print_header()
+    print("5. lépés: Napi maximum kereskedések száma")
+    print("-" * 55)
+    print()
+    print("  Hány kereskedést indíthat a bot naponta?")
+    print("  (Ez egy jelzésre nyitott pozíció-csoportot jelent)")
+    print()
+    print("  0 = korlátlan")
+    print("  1 = maximum 1 jelzés naponta (ajánlott kezdőknek)")
+    print("  2 = maximum 2 jelzés naponta")
+    print()
+    print("  Ha elérte a napi limitet, értesítést küld és")
+    print("  másnap este 20:00 után automatikusan visszaáll.")
+    print()
+
+    max_napi = kerd_int("  Max napi kereskedés (0=korlátlan): ", 0, 10)
+    settings["MAX_NAPI_KERESKEDES"] = max_napi
+
     # ── ÖSSZEFOGLALÁS ─────────────────────────────────────────────────────────
     clear()
     print_header()
@@ -246,6 +267,8 @@ def main():
         print(f"  Napi limit:       kikapcsolva")
 
     print(f"  Mozgó SL:         {'igen' if settings.get('MOZGO_SL_ENABLED') else 'nem'}")
+    max_k = settings.get('MAX_NAPI_KERESKEDES', 0)
+    print(f"  Max napi keresk.: {'korlátlan' if max_k == 0 else str(max_k)}")
     print()
 
     # Időablak alapértékek (nem kérdezzük, de kell a config-nak)

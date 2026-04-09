@@ -39,7 +39,10 @@ logger = logging.getLogger("main_c1")
 
 LABEL = "1.csoport"
 
-
+# ── Napi kereskedés számláló ──────────────────────────────────────────────────
+_napi_kereskedes_szam  = 0
+_napi_kereskedes_datum = None
+_trading_paused        = False  # /pause paranccsal állítható
 
 
 def check_and_update():
@@ -204,15 +207,27 @@ async def run_heartbeat():
             if config.POS3_ENABLED: aktiv.append(f"{config.POS3_LABEL}({config.POS3_LOT}lot, magic={config.POS3_MAGIC})")
             mozgo = "MOZGÓ SL" if config.MOZGO_SL_ENABLED else "FIX SL"
 
+            # Napi számláló nullázása és pause visszaállítása
+            global _napi_kereskedes_szam, _napi_kereskedes_datum, _trading_paused
+            _napi_kereskedes_szam  = 0
+            _napi_kereskedes_datum = now.date()
+            if _trading_paused:
+                _trading_paused = False
+                logger.info("Pause automatikusan visszaállítva (napi nullázás).")
+
             # MT5 önellenőrzés
             mt5_check = check_mt5_health()
             mt5_info  = format_mt5_health(mt5_check)
+
+            max_napi = getattr(config, 'MAX_NAPI_KERESKEDES', 0)
+            limit_info = f"Napi limit: {'korlátlan' if max_napi == 0 else str(max_napi)}"
 
             await send_notification(
                 f"✅ <b>1. csoport bot él</b>\n"
                 f"Idő: {now.strftime('%Y-%m-%d %H:%M')}\n"
                 f"Verzió: {mozgo}\n"
-                f"Aktív pozíciók: {', '.join(aktiv) if aktiv else 'egyik sem'}\n\n"
+                f"Aktív pozíciók: {', '.join(aktiv) if aktiv else 'egyik sem'}\n"
+                f"{limit_info}\n\n"
                 f"{mt5_info}"
             )
             last_sent_day = now.day
@@ -223,7 +238,36 @@ async def run_heartbeat():
 # ── Jelzés feldolgozás ────────────────────────────────────────────────────────
 
 async def process_signal(signal):
+    global _napi_kereskedes_szam, _napi_kereskedes_datum, _trading_paused
+
     logger.info(f"[{LABEL}] Jelzés: {signal.action} @ {signal.entry_mid}")
+
+    # ── Pause ellenőrzés ──────────────────────────────────────────────────────
+    if _trading_paused:
+        logger.info(f"[{LABEL}] Kereskedés szüneteltetve (/pause) — jelzés kihagyva.")
+        await send_notification(
+            f"⏸️ <b>Jelzés érkezett — kereskedés szünetel</b>\n"
+            f"A /resume paranccsal lehet visszakapcsolni."
+        )
+        return
+
+    # ── Napi limit ellenőrzés ─────────────────────────────────────────────────
+    max_napi = getattr(config, 'MAX_NAPI_KERESKEDES', 0)
+    if max_napi > 0:
+        from datetime import date
+        ma = date.today()
+        if _napi_kereskedes_datum != ma:
+            _napi_kereskedes_szam  = 0
+            _napi_kereskedes_datum = ma
+        if _napi_kereskedes_szam >= max_napi:
+            logger.info(f"[{LABEL}] Napi limit elérve ({_napi_kereskedes_szam}/{max_napi}) — jelzés kihagyva.")
+            await send_notification(
+                f"🚫 <b>Napi kereskedési limit elérve!</b>\n"
+                f"Ma már {_napi_kereskedes_szam} kereskedés volt (max: {max_napi}).\n"
+                f"Holnap este 20:00 után automatikusan visszaáll."
+            )
+            return
+
     mozgo = "MOZGÓ SL" if config.MOZGO_SL_ENABLED else "FIX SL"
     logger.info(f"[{LABEL}] Verzió: {mozgo}")
 
@@ -254,6 +298,10 @@ async def process_signal(signal):
             else:
                 await notify_trade_opened(deal, label=full_label)
             log_trade(deal)
+            # Csak az első pozíció nyitásakor növeljük a számlálót
+            if magic == config.POS1_MAGIC or (not config.POS1_ENABLED and magic == config.POS2_MAGIC) or                (not config.POS1_ENABLED and not config.POS2_ENABLED):
+                _napi_kereskedes_szam += 1
+                logger.info(f"Napi kereskedés számláló: {_napi_kereskedes_szam}")
         else:
             await notify_trade_failed(error, label=full_label)
             log_skipped_signal(signal, error)
@@ -374,13 +422,52 @@ async def run_bot():
                     f"👥 <b>Parancs csatorna tagjai:</b>\n{tagok_szoveg}"
                 )
 
+            elif text in ["/pause", "!pause"]:
+                global _trading_paused
+                _trading_paused = True
+                await send_notification(
+                    f"⏸️ <b>Kereskedés szüneteltetve!</b>\n"
+                    f"Forrás: <b>{LABEL}</b>\n"
+                    f"Új jelzésekre nem reagál.\n"
+                    f"Meglévő pozíciók futnak tovább (TP/SL szerint zárnak).\n"
+                    f"Visszakapcsolás: /resume\n"
+                    f"Automatikus visszaállítás: este 20:00"
+                )
+
+            elif text in ["/stop", "!stop"]:
+                _trading_paused = True
+                # Azonnal lezár mindent
+                sikeres, sikertelen = close_all_positions(config, label=LABEL)
+                await send_notification(
+                    f"🛑 <b>STOP — Minden pozíció lezárva!</b>\n"
+                    f"Forrás: <b>{LABEL}</b>\n"
+                    f"✅ Lezárva: {sikeres} pozíció\n"
+                    f"❌ Sikertelen: {sikertelen} pozíció\n\n"
+                    f"Új kereskedések szünetelnek.\n"
+                    f"Visszakapcsolás: /resume\n"
+                    f"Automatikus visszaállítás: este 20:00"
+                )
+
+            elif text in ["/resume", "!resume"]:
+                _trading_paused = False
+                await send_notification(
+                    f"▶️ <b>Kereskedés visszakapcsolva!</b>\n"
+                    f"Forrás: <b>{LABEL}</b>\n"
+                    f"A bot ismét reagál az új jelzésekre."
+                )
+
             elif text in ["/help", "!help"]:
+                max_napi = getattr(config, 'MAX_NAPI_KERESKEDES', 0)
                 await send_notification(
                     f"📋 <b>Elérhető parancsok:</b>\n\n"
                     f"/update — Bot frissítése GitHubról\n"
-                    f"/close — Összes nyitott pozíció lezárása\n"
+                    f"/close — Összes pozíció lezárása (bot fut tovább)\n"
+                    f"/pause — Nem nyit újat, meglévők futnak tovább\n"
+                    f"/stop — Azonnal lezár mindent és nem nyit újat\n"
+                    f"/resume — Kereskedés visszakapcsolása\n"
                     f"/status — Bot státusz + csatlakozott tagok\n"
-                    f"/help — Parancsok listája"
+                    f"/help — Parancsok listája\n\n"
+                    f"Napi limit: {'korlátlan' if max_napi == 0 else str(max_napi)}"
                 )
 
         logger.info(f"[{LABEL}] Parancs csatorna figyelés aktív: {command_channel}")
