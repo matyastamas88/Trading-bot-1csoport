@@ -299,12 +299,39 @@ async def process_signal(signal):
                 await notify_trade_opened(deal, label=full_label)
             log_trade(deal)
             # Csak az első pozíció nyitásakor növeljük a számlálót
-            if magic == config.POS1_MAGIC or (not config.POS1_ENABLED and magic == config.POS2_MAGIC) or                (not config.POS1_ENABLED and not config.POS2_ENABLED):
+            if magic == config.POS1_MAGIC or (not config.POS1_ENABLED and magic == config.POS2_MAGIC) or \
+               (not config.POS1_ENABLED and not config.POS2_ENABLED):
                 _napi_kereskedes_szam += 1
                 logger.info(f"Napi kereskedés számláló: {_napi_kereskedes_szam}")
         else:
             await notify_trade_failed(error, label=full_label)
             log_skipped_signal(signal, error)
+
+
+# ── Jelzés feldolgozó helper (új + szerkesztett üzenetekhez közös) ─────────────
+
+async def handle_message_text(text: str, source: str = "új"):
+    """Közös logika új és szerkesztett üzenetekhez."""
+    logger.info(f"[{LABEL}] {source.capitalize()} üzenet ({len(text)} karakter)")
+
+    # ── Update parancs ellenőrzése ──────────────────────────────────────────
+    if text.strip().lower() in ["/update", "!update"]:
+        logger.info(f"[{LABEL}] UPDATE parancs érkezett!")
+        return "update"
+
+    # ── Close parancs ellenőrzése ───────────────────────────────────────────
+    if "close" in text.lower():
+        logger.info(f"[{LABEL}] CLOSE parancs érkezett!")
+        return "close"
+
+    signal = parse_signal(text)
+    if signal:
+        asyncio.create_task(process_signal(signal))
+    else:
+        # INFO szinten logolva, hogy látszódjon a logban ha valami kiesik
+        logger.info(f"[{LABEL}] Nem felismert formátum — kihagyva. Szöveg: {text[:80]!r}")
+
+    return None
 
 
 # ── Főprogram ─────────────────────────────────────────────────────────────────
@@ -327,26 +354,28 @@ async def run_bot():
         logger.critical("MT5 csatlakozás sikertelen. Bot leáll.")
         return
 
-    client = TelegramClient(config.SESSION_NEV, config.TELEGRAM_API_ID, config.TELEGRAM_API_HASH)
+    # ── catch_up=True: reconnect után pótolja a kiesett üzeneteket ────────────
+    client = TelegramClient(
+        config.SESSION_NEV,
+        config.TELEGRAM_API_ID,
+        config.TELEGRAM_API_HASH,
+        catch_up=True,
+    )
 
+    # ── Új üzenetek figyelése ─────────────────────────────────────────────────
     @client.on(events.NewMessage(chats=config.SIGNAL_CHANNEL))
     async def on_message(event):
         text = event.message.text or ""
-        logger.info(f"[{LABEL}] Új üzenet ({len(text)} karakter)")
+        cmd = await handle_message_text(text, source="új")
 
-        # ── Update parancs ellenőrzése ──────────────────────────────────
-        if text.strip().lower() in ["/update", "!update"]:
+        if cmd == "update":
             sender = await event.get_sender()
             if sender and sender.id == config.NOTIFY_CHAT_ID:
-                logger.info(f"[{LABEL}] UPDATE parancs érkezett!")
                 asyncio.create_task(do_update(client, config.NOTIFY_CHAT_ID))
             else:
                 logger.warning("UPDATE parancs ismeretlen feladótól — kihagyva.")
-            return
 
-        # ── Close parancs ellenőrzése ─────────────────────────────────────
-        if "close" in text.lower():
-            logger.info(f"[{LABEL}] CLOSE parancs érkezett!")
+        elif cmd == "close":
             sikeres, sikertelen = close_all_positions(config, label=LABEL)
             if sikeres > 0 or sikertelen > 0:
                 await send_notification(
@@ -361,14 +390,19 @@ async def run_bot():
                     f"Forrás: <b>{LABEL}</b>\n"
                     f"Nincs nyitott bot pozíció."
                 )
-            return
 
+    # ── Szerkesztett üzenetek figyelése ──────────────────────────────────────
+    # Ha a csatorna admin utólag szerkeszti a jelzést, azt is elkapjuk
+    @client.on(events.MessageEdited(chats=config.SIGNAL_CHANNEL))
+    async def on_edited(event):
+        text = event.message.text or ""
+        logger.info(f"[{LABEL}] Szerkesztett üzenet érkezett ({len(text)} karakter)")
         signal = parse_signal(text)
         if signal:
+            logger.info(f"[{LABEL}] Szerkesztett jelzés feldolgozva: {signal.action} @ {signal.entry_mid}")
             asyncio.create_task(process_signal(signal))
         else:
-            logger.debug("Nem felismert formátum — kihagyva.")
-
+            logger.info(f"[{LABEL}] Szerkesztett üzenet — nem jelzés formátum, kihagyva.")
 
     # ── Parancs csoport figyelő ───────────────────────────────────────────────
     command_channel = getattr(config, 'COMMAND_CHANNEL', None)
@@ -436,7 +470,6 @@ async def run_bot():
 
             elif text in ["/stop", "!stop"]:
                 _trading_paused = True
-                # Azonnal lezár mindent
                 sikeres, sikertelen = close_all_positions(config, label=LABEL)
                 await send_notification(
                     f"🛑 <b>STOP — Minden pozíció lezárva!</b>\n"
@@ -475,15 +508,15 @@ async def run_bot():
     await client.start(phone=config.TELEGRAM_PHONE)
     logger.info(f"[{LABEL}] Telegram figyelés aktív: {config.SIGNAL_CHANNEL}")
 
-# Csak az aktív pozíciók és beállítások összegyűjtése
+    # Csak az aktív pozíciók és beállítások összegyűjtése
     settings_list = []
-    
+
     if config.POS1_ENABLED:
         settings_list.append(f"💰 POS1 Lot: <b>{config.POS1_LOT}</b> (TP3) | Magic: <code>11</code>")
-    
+
     if config.POS2_ENABLED:
         settings_list.append(f"💰 POS2 Lot: <b>{config.POS2_LOT}</b> (TP5) | Magic: <code>12</code>")
-        
+
     if config.POS3_ENABLED:
         settings_list.append(f"💰 POS3 Lot: <b>{config.POS3_LOT}</b> (TP6) | Magic: <code>13</code>")
 
