@@ -1,0 +1,7 @@
+Frissetes.bat — Manuális GitHub frissítő. Megmutatja mik változtak az új verzióban, megkérdezi hogy le akarod-e tölteni, és ha igen, frissíti a botot. Utána kézzel kell újraindítani a botot.
+
+1lepes.bat — Automatikus indító. Ellenőrzi hogy van-e Python, ha nincs telepíti. Letölti a frissítéseket GitHubról, telepíti a szükséges modulokat, majd elindítja a botot. Ez egy "mindent egyben" megoldás.
+
+setup.bat — Egy setup.py nevű Python scriptet indít el a bot mappájából. Ez egy beállítási varázsló hogy a .env fájl kitöltéséhez segít interaktívan. Erre akkor van szükség ha szeretnéd a bot beállításait módosítani pl.:botok száma, lot méret stb.
+
+main1.bat — Egyszerű bot indító. Csak annyit csinál hogy belép a bot mappájába és elindítja a main1.py-t a már korábban beállított értékekkel.
