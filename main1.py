@@ -42,6 +42,12 @@ LABEL = config.BOT_NEV  # .env fájlban állítható: BOT_NEV=SuperXAUUSD
 # ── Napi kereskedés számláló ──────────────────────────────────────────────────
 _napi_kereskedes_szam  = 0
 _napi_kereskedes_datum = None
+
+# ── Duplikáció szűrő ──────────────────────────────────────────────────────────
+# Tárolja az utoljára feldolgozott jelzést — megakadályozza hogy ugyanaz a
+# jelzés (új + szerkesztett esemény egyszerre) kétszer nyisson pozíciót
+_utolso_jelzes_kulcs = None   # "SELL_4727.5" formátum
+_utolso_jelzes_ido   = None   # datetime amikor feldolgoztuk
 _trading_paused        = False  # /pause paranccsal állítható
 
 
@@ -239,8 +245,26 @@ async def run_heartbeat():
 
 async def process_signal(signal):
     global _napi_kereskedes_szam, _napi_kereskedes_datum, _trading_paused
+    global _utolso_jelzes_kulcs, _utolso_jelzes_ido
 
     logger.info(f"[{LABEL}] Jelzés: {signal.action} @ {signal.entry_mid}")
+
+    # ── Duplikáció szűrő ──────────────────────────────────────────────────────
+    # Ha ugyanez a jelzés már feldolgozásra került az utóbbi 10 másodpercben,
+    # hagyjuk ki — ez véd az új+szerkesztett esemény egyszerre tüzelése ellen
+    from datetime import datetime
+    jelzes_kulcs = f"{signal.action}_{signal.entry_mid}"
+    most = datetime.now()
+    if (_utolso_jelzes_kulcs == jelzes_kulcs and
+            _utolso_jelzes_ido is not None and
+            (most - _utolso_jelzes_ido).total_seconds() < 10):
+        logger.warning(
+            f"[{LABEL}] Duplikált jelzés kiszűrve: {jelzes_kulcs} "
+            f"(már feldolgozva {(most - _utolso_jelzes_ido).total_seconds():.1f} másodperce)"
+        )
+        return
+    _utolso_jelzes_kulcs = jelzes_kulcs
+    _utolso_jelzes_ido   = most
 
     # ── Pause ellenőrzés ──────────────────────────────────────────────────────
     if _trading_paused:
