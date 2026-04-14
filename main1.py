@@ -474,6 +474,7 @@ async def run_bot():
     if command_channel:
         @client.on(events.NewMessage(chats=command_channel))
         async def on_command(event):
+            global _trading_paused
             text = (event.message.text or "").strip().lower()
             sender = await event.get_sender()
             sender_id = sender.id if sender else None
@@ -522,7 +523,6 @@ async def run_bot():
                 )
 
             elif text in ["/pause", "!pause"]:
-                global _trading_paused
                 _trading_paused = True
                 await send_notification(
                     f"⏸️ <b>Kereskedés szüneteltetve!</b>\n"
