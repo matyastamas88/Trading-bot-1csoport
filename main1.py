@@ -15,7 +15,7 @@ import logging
 import sys
 import os
 import subprocess
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from telethon import TelegramClient, events
 
 import config
@@ -38,6 +38,9 @@ logging.basicConfig(
 logger = logging.getLogger("main_c1")
 
 LABEL = config.BOT_NEV  # .env fájlban állítható: BOT_NEV=SuperXAUUSD
+
+# ── Jelzés kor ellenőrzés ─────────────────────────────────────────────────────
+MAX_JELZES_KOR_PERC = 10  # Ennél régebbi jelzést nem dolgoz fel a bot
 
 # ── Napi kereskedés számláló ──────────────────────────────────────────────────
 _napi_kereskedes_szam  = 0
@@ -252,7 +255,6 @@ async def process_signal(signal):
     # ── Duplikáció szűrő ──────────────────────────────────────────────────────
     # Ha ugyanez a jelzés már feldolgozásra került az utóbbi 10 másodpercben,
     # hagyjuk ki — ez véd az új+szerkesztett esemény egyszerre tüzelése ellen
-    from datetime import datetime
     jelzes_kulcs = f"{signal.action}_{signal.entry_mid}"
     most = datetime.now()
     if (_utolso_jelzes_kulcs == jelzes_kulcs and
@@ -278,8 +280,7 @@ async def process_signal(signal):
     # ── Napi limit ellenőrzés ─────────────────────────────────────────────────
     max_napi = getattr(config, 'MAX_NAPI_KERESKEDES', 0)
     if max_napi > 0:
-        from datetime import date
-        ma = date.today()
+        ma = datetime.now().date()
         if _napi_kereskedes_datum != ma:
             _napi_kereskedes_szam  = 0
             _napi_kereskedes_datum = ma
@@ -390,6 +391,26 @@ async def run_bot():
     @client.on(events.NewMessage(chats=config.SIGNAL_CHANNEL))
     async def on_message(event):
         text = event.message.text or ""
+
+        # ── Jelzés kor ellenőrzés ─────────────────────────────────────────────
+        uzenet_ideje = event.message.date  # UTC időbélyeg a Telegramtól
+        most_utc = datetime.now(timezone.utc)
+        kor_perc = (most_utc - uzenet_ideje).total_seconds() / 60
+        if kor_perc > MAX_JELZES_KOR_PERC:
+            signal_check = parse_signal(text)
+            if signal_check:
+                logger.warning(
+                    f"[{LABEL}] ⚠️ Lejárt jelzés ({kor_perc:.1f} perc régi) — kihagyva. "
+                    f"({signal_check.action} @ {signal_check.entry_mid})"
+                )
+                await send_notification(
+                    f"⚠️ <b>Lejárt jelzés kihagyva!</b>\n"
+                    f"Az üzenet {kor_perc:.0f} perccel ezelőtt érkezett.\n"
+                    f"(Limit: {MAX_JELZES_KOR_PERC} perc)\n"
+                    f"Jelzés: {signal_check.action} @ {signal_check.entry_mid}"
+                )
+            return
+
         cmd = await handle_message_text(text, source="új")
 
         if cmd == "update":
@@ -421,6 +442,26 @@ async def run_bot():
     async def on_edited(event):
         text = event.message.text or ""
         logger.info(f"[{LABEL}] Szerkesztett üzenet érkezett ({len(text)} karakter)")
+
+        # ── Jelzés kor ellenőrzés ─────────────────────────────────────────────
+        uzenet_ideje = event.message.date  # UTC időbélyeg a Telegramtól
+        most_utc = datetime.now(timezone.utc)
+        kor_perc = (most_utc - uzenet_ideje).total_seconds() / 60
+        if kor_perc > MAX_JELZES_KOR_PERC:
+            signal_check = parse_signal(text)
+            if signal_check:
+                logger.warning(
+                    f"[{LABEL}] ⚠️ Lejárt szerkesztett jelzés ({kor_perc:.1f} perc régi) — kihagyva. "
+                    f"({signal_check.action} @ {signal_check.entry_mid})"
+                )
+                await send_notification(
+                    f"⚠️ <b>Lejárt jelzés kihagyva!</b>\n"
+                    f"Az üzenet {kor_perc:.0f} perccel ezelőtt érkezett.\n"
+                    f"(Limit: {MAX_JELZES_KOR_PERC} perc)\n"
+                    f"Jelzés: {signal_check.action} @ {signal_check.entry_mid}"
+                )
+            return
+
         signal = parse_signal(text)
         if signal:
             logger.info(f"[{LABEL}] Szerkesztett jelzés feldolgozva: {signal.action} @ {signal.entry_mid}")
