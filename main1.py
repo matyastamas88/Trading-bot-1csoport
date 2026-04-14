@@ -509,6 +509,7 @@ async def run_bot():
                 mt5_info  = format_mt5_health(mt5_check)
                 max_napi  = getattr(config, 'MAX_NAPI_KERESKEDES', 0)
                 limit_info = f"Napi limit: {'korlátlan' if max_napi == 0 else str(max_napi)}"
+                global _trading_paused
                 pause_info = "⏸️ Kereskedés SZÜNETEL" if _trading_paused else ""
 
                 await send_notification(
