@@ -502,23 +502,23 @@ async def run_bot():
                 now = datetime.now()
                 mozgo = "MOZGÓ SL" if config.MOZGO_SL_ENABLED else "FIX SL"
                 aktiv_poz = []
-                if config.POS1_ENABLED: aktiv_poz.append(f"{config.POS1_LABEL}({config.POS1_LOT}lot)")
-                if config.POS2_ENABLED: aktiv_poz.append(f"{config.POS2_LABEL}({config.POS2_LOT}lot)")
-                if config.POS3_ENABLED: aktiv_poz.append(f"{config.POS3_LABEL}({config.POS3_LOT}lot)")
-                try:
-                    participants = await client.get_participants(command_channel)
-                    tagok = [f"  • {p.first_name or ''} {p.last_name or ''} (@{p.username or 'nincs'})".strip()
-                             for p in participants if not p.bot]
-                    tagok_szoveg = "\n".join(tagok) if tagok else "  (nincs tag)"
-                except Exception:
-                    tagok_szoveg = "  (nem sikerült lekérni)"
+                if config.POS1_ENABLED: aktiv_poz.append(f"{config.POS1_LABEL}({config.POS1_LOT}lot, magic={config.POS1_MAGIC})")
+                if config.POS2_ENABLED: aktiv_poz.append(f"{config.POS2_LABEL}({config.POS2_LOT}lot, magic={config.POS2_MAGIC})")
+                if config.POS3_ENABLED: aktiv_poz.append(f"{config.POS3_LABEL}({config.POS3_LOT}lot, magic={config.POS3_MAGIC})")
+                mt5_check = check_mt5_health()
+                mt5_info  = format_mt5_health(mt5_check)
+                max_napi  = getattr(config, 'MAX_NAPI_KERESKEDES', 0)
+                limit_info = f"Napi limit: {'korlátlan' if max_napi == 0 else str(max_napi)}"
+                pause_info = "⏸️ Kereskedés SZÜNETEL" if _trading_paused else ""
 
                 await send_notification(
-                    f"📊 <b>Bot státusz — {LABEL}</b>\n"
+                    f"📊 <b>{LABEL} bot státusz</b>\n"
                     f"Idő: {now.strftime('%Y-%m-%d %H:%M')}\n"
                     f"Verzió: {mozgo}\n"
-                    f"Aktív: {', '.join(aktiv_poz) if aktiv_poz else 'egyik sem'}\n\n"
-                    f"👥 <b>Parancs csatorna tagjai:</b>\n{tagok_szoveg}"
+                    f"Aktív pozíciók: {', '.join(aktiv_poz) if aktiv_poz else 'egyik sem'}\n"
+                    f"{limit_info}\n"
+                    + (f"{pause_info}\n" if pause_info else "") +
+                    f"\n{mt5_info}"
                 )
 
             elif text in ["/pause", "!pause"]:
