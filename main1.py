@@ -289,7 +289,7 @@ async def process_signal(signal):
             await send_notification(
                 f"🚫 <b>Napi kereskedési limit elérve!</b>\n"
                 f"Ma már {_napi_kereskedes_szam} kereskedés volt (max: {max_napi}).\n"
-                f"Holnap este 20:00 után automatikusan visszaáll."
+                f"Ma 20:00 után automatikusan visszaáll."
             )
             return
 
