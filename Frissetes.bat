@@ -33,7 +33,7 @@ set /p VALASZ="Szeretned letolteni a frissitest? (i/n): "
 if /i "%VALASZ%"=="i" (
     echo.
     echo Frissites letoltese...
-    git -C "%BOT_DIR%" pull origin %BRANCH%
+    git -C "%BOT_DIR%" reset --hard origin/%BRANCH%
     echo.
     echo ============================================================
     echo   KESZ! Inditsd ujra a botot!
