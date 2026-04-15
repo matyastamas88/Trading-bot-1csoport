@@ -280,16 +280,12 @@ async def process_signal(signal):
     # ── Napi limit ellenőrzés ─────────────────────────────────────────────────
     max_napi = getattr(config, 'MAX_NAPI_KERESKEDES', 0)
     if max_napi > 0:
-        ma = datetime.now().date()
-        if _napi_kereskedes_datum != ma:
-            _napi_kereskedes_szam  = 0
-            _napi_kereskedes_datum = ma
         if _napi_kereskedes_szam >= max_napi:
             logger.info(f"[{LABEL}] Napi limit elérve ({_napi_kereskedes_szam}/{max_napi}) — jelzés kihagyva.")
             await send_notification(
                 f"🚫 <b>Napi kereskedési limit elérve!</b>\n"
                 f"Ma már {_napi_kereskedes_szam} kereskedés volt (max: {max_napi}).\n"
-                f"Ma 20:00 után automatikusan visszaáll."
+                f"Este 20:00-kor automatikusan visszaáll."
             )
             return
 
@@ -509,7 +505,11 @@ async def run_bot():
                 mt5_check = check_mt5_health()
                 mt5_info  = format_mt5_health(mt5_check)
                 max_napi  = getattr(config, 'MAX_NAPI_KERESKEDES', 0)
-                limit_info = f"Napi limit: {'korlátlan' if max_napi == 0 else str(max_napi)}"
+                limit_info = (
+                    f"Napi kereskedések: korlátlan"
+                    if max_napi == 0
+                    else f"Napi kereskedések: {_napi_kereskedes_szam}/{max_napi}"
+                )
                 pause_sor = "⏸️ Kereskedés SZÜNETEL\n" if _trading_paused else ""
 
                 await send_notification(
