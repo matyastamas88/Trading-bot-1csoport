@@ -229,7 +229,11 @@ async def run_heartbeat():
             mt5_info  = format_mt5_health(mt5_check)
 
             max_napi = getattr(config, 'MAX_NAPI_KERESKEDES', 0)
-            limit_info = f"Napi limit: {'korlátlan' if max_napi == 0 else str(max_napi)}"
+            limit_info = (
+                f"Napi kereskedések: korlátlan"
+                if max_napi == 0
+                else f"Napi kereskedések: {_napi_kereskedes_szam}/{max_napi}"
+            )
 
             await send_notification(
                 f"✅ <b>{LABEL} bot él</b>\n"
@@ -399,12 +403,7 @@ async def run_bot():
                     f"[{LABEL}] ⚠️ Lejárt jelzés ({kor_perc:.1f} perc régi) — kihagyva. "
                     f"({signal_check.action} @ {signal_check.entry_mid})"
                 )
-                await send_notification(
-                    f"⚠️ <b>Lejárt jelzés kihagyva!</b>\n"
-                    f"Az üzenet {kor_perc:.0f} perccel ezelőtt érkezett.\n"
-                    f"(Limit: {MAX_JELZES_KOR_PERC} perc)\n"
-                    f"Jelzés: {signal_check.action} @ {signal_check.entry_mid}"
-                )
+                # Csak logba írjuk, NEM küldünk Telegram értesítőt
             return
 
         cmd = await handle_message_text(text, source="új")
@@ -450,12 +449,7 @@ async def run_bot():
                     f"[{LABEL}] ⚠️ Lejárt szerkesztett jelzés ({kor_perc:.1f} perc régi) — kihagyva. "
                     f"({signal_check.action} @ {signal_check.entry_mid})"
                 )
-                await send_notification(
-                    f"⚠️ <b>Lejárt jelzés kihagyva!</b>\n"
-                    f"Az üzenet {kor_perc:.0f} perccel ezelőtt érkezett.\n"
-                    f"(Limit: {MAX_JELZES_KOR_PERC} perc)\n"
-                    f"Jelzés: {signal_check.action} @ {signal_check.entry_mid}"
-                )
+                # Csak logba írjuk, NEM küldünk Telegram értesítőt
             return
 
         signal = parse_signal(text)
@@ -471,6 +465,15 @@ async def run_bot():
         @client.on(events.NewMessage(chats=command_channel))
         async def on_command(event):
             global _trading_paused
+
+            # ── Parancs kor ellenőrzés — régi parancsokat kihagyja újraindításkor ──
+            uzenet_ideje = event.message.date
+            most_utc = datetime.now(timezone.utc)
+            kor_perc = (most_utc - uzenet_ideje).total_seconds() / 60
+            if kor_perc > 5:
+                logger.info(f"[{LABEL}] Régi parancs kihagyva ({kor_perc:.1f} perc régi)")
+                return
+
             text = (event.message.text or "").strip().lower()
             sender = await event.get_sender()
             sender_id = sender.id if sender else None
