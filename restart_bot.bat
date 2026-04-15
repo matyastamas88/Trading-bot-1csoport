@@ -4,7 +4,9 @@ cd C:\Bot\Csoport1_bot
 
 :: Leállítja a futó bot folyamatot
 taskkill /FI "WINDOWTITLE eq 1. Csoport Bot - FIX SL" /F >nul 2>&1
-timeout /t 3 /nobreak >nul
+
+:: Várunk hogy teljesen leálljon és a session fájl felszabaduljon
+timeout /t 15 /nobreak >nul
 
 :: Újraindítja a botot (ugyanebben az ablakban)
 python main1.py
